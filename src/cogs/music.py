@@ -617,7 +617,7 @@ class Music(commands.Cog):
         else:
             # It's a plain query; prepend "ytsearch:" to search YouTube
 
-            search = get_url_from_query(search)
+            search = await get_url_from_query(search)
 
             tracks = await wavelink.Playable.search(f"ytsearch:{search}")
 
