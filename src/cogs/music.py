@@ -618,6 +618,8 @@ class Music(commands.Cog):
             # It's a plain query; prepend "ytsearch:" to search YouTube
 
             search = await get_url_from_query(search)
+            
+            tracks = await wavelink.Playable.search(search)
 
         if not tracks:
 
