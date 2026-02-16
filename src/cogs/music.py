@@ -11,32 +11,43 @@ import re
 import urllib.parse as _urlparse
 import aiohttp
 
-async def search_youtube(query: str) -> str | None:
-    query = _urlparse.quote_plus(query)
-    url = f"https://majnik-api.vercel.app/yt/search?query={query}"
+async def search_youtube_api(query: str) -> typing.Optional[dict]:
+    q = _urlparse.quote_plus(query)
+    url = f"https://majnik-api.vercel.app/yt/search?query={q}"
 
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, timeout=10) as resp:
                 if resp.status != 200:
                     return None
-                
                 data = await resp.json()
 
-        if not data.get("results"):
+        if not data or not data.get("results"):
             return None
-        
+
         return data
 
     except Exception as e:
-        print("YT API search failed:", e)
+        logger.warning(f"YT API search failed: {e}")
         return None
 
-async def get_url_from_query(query: str) -> str | None:
-    return await search_youtube(query)["results"][0]["url"]
+async def get_url_from_query(query: str) -> typing.Optional[str]:
+    data = await search_youtube_api(query)
+    if not data:
+        return f"ytsearch:{query}"
+    results = data.get("results", [])
+    if not results:
+        return f"ytsearch:{query}"
+    return results[0].get("url") or f"ytsearch:{query}"
 
-async def get_image_from_query(query: str) -> str | None:
-    return await search_youtube(query)["results"][0]["thumbnail"]
+async def get_image_from_query(query: str) -> typing.Optional[str]:
+    data = await search_youtube_api(query)
+    if not data:
+        return None
+    results = data.get("results", [])
+    if not results:
+        return None
+    return results[0].get("thumbnail")
 
 class CustomPlayer(wavelink.Player):
     def __init__(self, *args, **kwargs):
@@ -421,6 +432,7 @@ class Music(commands.Cog):
             if hours > 0:
                 return f"{hours}:{minutes:02}:{seconds:02}"
             return f"{minutes:02}:{seconds:02}"
+
         def create_progress_bar(position, length, bar_length=25):
             if length == 0:
                 return ""
@@ -430,24 +442,69 @@ class Music(commands.Cog):
             filled = "▬" * filled_blocks
             empty = "—" * empty_blocks
             return f"{filled}{empty}"
+
         if vc and vc.playing:
             track = vc.current
             time_string = f"{format_time(vc.position)} / {format_time(track.length)}"
             progress_bar = create_progress_bar(vc.position, track.length)
             status_emoji = "⏸️ Paused" if vc.paused else "▶️ Playing"
             repeat_status = "✅ On" if vc.repeat_track else "❌ Off"
-            embed = discord.Embed(title=f"{status_emoji} | {track.title}", url=track.uri, color=discord.Color.blue())
+            embed = discord.Embed(title=f"{status_emoji} | {track.title}", url=getattr(track, "uri", None), color=discord.Color.blue())
             embed.set_author(name="Music Control Panel")
-            embed.add_field(name="Queue Size", value=f"{len(vc.queue)} tracks", inline=True)
+            try:
+                embed.add_field(name="Queue Size", value=f"{len(vc.queue)} tracks", inline=True)
+            except Exception:
+                embed.add_field(name="Queue Size", value="Unknown", inline=True)
             embed.add_field(name="Volume", value=f"{vc.volume}%", inline=True)
             embed.add_field(name="Repeat", value=repeat_status, inline=True)
             embed.add_field(name="Progress", value=f"`{time_string}`\n{progress_bar}", inline=False)
-            # Use the track's thumbnail if available, otherwise use the bot's avatar
-            thumbnail = await get_image_from_query(track.title) if track else None
-            if thumbnail:
-                embed.set_thumbnail(url=thumbnail)
-            elif self.bot.user and self.bot.user.avatar:
-                embed.set_thumbnail(url=self.bot.user.avatar.url)
+
+            # Prefer any existing thumbnail attributes on the track, then a cached value.
+            thumbnail = None
+            for attr in ("thumbnail", "thumbnails", "image", "thumbnail_url", "artwork"):
+                thumbnail = getattr(track, attr, None)
+                if thumbnail:
+                    break
+            if not thumbnail:
+                thumbnail = getattr(track, "_cached_thumbnail", None)
+
+            # If no thumbnail cached, schedule a single background fetch (won't block updates).
+            if not thumbnail:
+                query_for_thumb = getattr(track, "uri", None) or getattr(track, "title", None) or ""
+                async def _fetch_and_cache(t, q, player_vc):
+                    try:
+                        img = await get_image_from_query(q)
+                        if img:
+                            try:
+                                setattr(t, "_cached_thumbnail", img)
+                            except Exception:
+                                pass
+                            # Try to update the panel once we have a thumbnail.
+                            if player_vc and getattr(player_vc, "panel_message", None):
+                                try:
+                                    await self.update_panel_message(player_vc)
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+                try:
+                    # Fire-and-forget; reduces repeated network calls by caching result on the track.
+                    asyncio.create_task(_fetch_and_cache(track, query_for_thumb, vc))
+                except Exception:
+                    pass
+            else:
+                # If we have a thumbnail (from attributes or cache), set it.
+                try:
+                    embed.set_thumbnail(url=thumbnail)
+                except Exception:
+                    pass
+
+            # Fallback to bot avatar if no thumbnail available now.
+            if not thumbnail and self.bot.user and self.bot.user.avatar:
+                try:
+                    embed.set_thumbnail(url=self.bot.user.avatar.url)
+                except Exception:
+                    pass
         else:
             embed = discord.Embed(title="Nothing is currently playing. 🎵", description=f"Use `{PREFIX}music play <song>` to start the music!", color=discord.Color.red())
         return embed
