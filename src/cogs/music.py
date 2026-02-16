@@ -551,8 +551,24 @@ class Music(commands.Cog):
         embed.add_field(name=PREFIX+"music panel", value="Show the music control panel", inline=False)
         await ctx.send(embed=embed)
 
+    # FIX for lavalink dieing on long inactivity
+    async def ensure_lavalink_connection(self):
+        # If no nodes or marked offline → reconnect
+        if not wavelink.Pool.nodes or not self._lavalink_online:
+            print("[MUSIC] Lavalink offline, reconnecting...")
+            try:
+                await wavelink.Pool.disconnect()
+            except:
+                pass
+
+            node = wavelink.Node(uri=LAVALINK_URI, password=LAVALINK_PASSWORD)
+            await wavelink.Pool.connect(client=self.bot, nodes=[node])
+            self._lavalink_online = True
+            print("[MUSIC] Lavalink reconnected.")
+
     @music.command(name="play", aliases=["pl"])
     async def play(self, ctx: commands.Context, *, search: str):
+        await self.ensure_lavalink_connection()
         vc: CustomPlayer = ctx.voice_client
         if not vc:
             if not ctx.author.voice:
