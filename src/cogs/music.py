@@ -9,26 +9,27 @@ import asyncio
 import time
 import re
 import urllib.parse as _urlparse
-import yt_dlp
+import aiohttp
 
-def get_url_from_query(query):
-    # Nastavenia pre yt-dlp
-    ydl_opts = {
-        'format': 'best',
-        'noplaylist': True,        # Zabezpečí, že sa nebude spracovávať celý playlist
-        'quiet': True,             # Potlačí výpisy do konzoly
-        'simulate': True,          # Nesťahovať video, iba získať info
-        'default_search': 'ytsearch', # Nastaví vyhľadávanie cez YouTube
-    }
+async def get_url_from_query(query: str) -> str | None:
+    query = _urlparse.quote_plus(query)
+    url = f"https://majnik-api.vercel.app/yt/search?query={query}"
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        # Vyhľadáme iba prvý výsledok (ytsearch1)
-        info = ydl.extract_info(f"ytsearch1:{query}", download=False)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, timeout=10) as resp:
+                if resp.status != 200:
+                    return None
+                
+                data = await resp.json()
+
+        if not data.get("results"):
+            return None
         
-        if 'entries' in info and len(info['entries']) > 0:
-            # Získame URL z prvého nájdeného záznamu
-            video_url = info['entries'][0]['webpage_url']
-            return video_url
+        return data["results"][0]["url"]  # first result
+
+    except Exception as e:
+        print("YT API search failed:", e)
         return None
 
 class CustomPlayer(wavelink.Player):
