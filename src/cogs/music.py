@@ -664,28 +664,36 @@ class Music(commands.Cog):
             try:
                 await vc.set_volume(50)
             except Exception as e:
-                logger.warning(f"[MUSIC | {vc.guild.name if vc.guild else "Unknown"} | ({vc.guild.id if vc.guild else "N/A"})] Failed to set initial volume: {e}")
+                logger.warning(f"[MUSIC | {vc.guild.name if vc.guild else 'Unknown'} | ({vc.guild.id if vc.guild else 'N/A'})] Failed to set initial volume: {e}")
         if not vc.panel_message:
             try:
                 vc.panel_message = await ctx.send(embed=await self.build_embed(vc), view=self.panel_view)
                 await self.update_panel_message(vc)
             except Exception as e:
-                logger.warning(f"[{vc.guild.name if vc.guild else "Unknown"} | ({vc.guild.id if vc.guild else "N/A"})] Failed to create music panel message: {e}")
+                logger.warning(f"[{vc.guild.name if vc.guild else 'Unknown'} | ({vc.guild.id if vc.guild else 'N/A'})] Failed to create music panel message: {e}")
                 vc.panel_message = None
 
         # Detect if the search string is a URL or a plain query
         if re.match(r'https?://\S+', search):
-            # It's a link; use wavelink.Playable.search directly
-            tracks = await wavelink.Playable.search(search)
+            query_to_search = search
         else:
-            # It's a plain query; prepend "ytsearch:" to search YouTube
+            query_to_search = await get_url_from_query(search)
 
-            search = await get_url_from_query(search)
-            
-            tracks = await wavelink.Playable.search(search)
+        try:
+            raw_results = await wavelink.Playable.search(query_to_search)
+        except Exception as e:
+            logger.warning(f"[MUSIC | {vc.guild.name if vc.guild else 'Unknown'}] Search failed for '{search}': {e}")
 
-        if not tracks:
+            embed = discord.Embed()
 
+            embed.title = "Internal Error"
+            embed.description = "An error occurred while searching for that track."
+            embed.color = discord.Color.red()
+
+            await ctx.send(embed=embed)
+            return
+
+        if not raw_results:
             embed = discord.Embed()
 
             embed.title = "Internal Error"
@@ -693,33 +701,32 @@ class Music(commands.Cog):
             embed.color = discord.Color.red()
 
             await ctx.send(embed=embed)
-            logger.info(f"[MUSIC | {vc.guild.name if vc.guild else "Unknown"} | ({vc.guild.id if vc.guild else "N/A"})] No music found for search: {search}")
+            logger.info(f"[MUSIC | {vc.guild.name if vc.guild else 'Unknown'} | ({vc.guild.id if vc.guild else 'N/A'})] No music found for search: {search}")
             return
 
-        if isinstance(tracks, wavelink.Playlist):
+        # Playlist handling
+        if isinstance(raw_results, wavelink.Playlist):
             added_count = 0
-            for track in tracks.tracks:
+            for track in raw_results.tracks:
                 track.requester = ctx.author
                 vc.queue.put(track)
                 added_count += 1
-            # Safely build a link for the playlist: some Playlist objects may not have `uri`.
-            playlist_url = getattr(tracks, "uri", None)
+            playlist_url = getattr(raw_results, "uri", None)
             if not playlist_url:
-                # Fall back to the first track's uri if available
-                first = tracks.tracks[0] if getattr(tracks, "tracks", None) else None
+                first = raw_results.tracks[0] if getattr(raw_results, "tracks", None) else None
                 playlist_url = getattr(first, "uri", None) if first else None
             if playlist_url:
-                desc = f"Added {added_count} tracks from [{tracks.name}]({playlist_url})"
+                desc = f"Added {added_count} tracks from [{raw_results.name}]({playlist_url})"
             else:
-                desc = f"Added {added_count} tracks from {tracks.name}"
+                desc = f"Added {added_count} tracks from {raw_results.name}"
             embed = discord.Embed(title="Playlist Added to Queue", description=desc, color=discord.Color.green())
             await ctx.send(embed=embed)
-            logger.info(f"[MUSIC | {vc.guild.name if vc.guild else "Unknown"} | ({vc.guild.id if vc.guild else "N/A"})] Queued playlist: {tracks.name} with {added_count} tracks")
+            logger.info(f"[MUSIC | {vc.guild.name if vc.guild else 'Unknown'} | ({vc.guild.id if vc.guild else 'N/A'})] Queued playlist: {raw_results.name} with {added_count} tracks")
             if not vc.playing and not vc.paused:
                 try:
                     await vc.play(vc.queue.get())
                 except Exception as e:
-                    logger.warning(f"[MUSIC | {vc.guild.name if vc.guild else "Unknown"} | ({vc.guild.id if vc.guild else "N/A"})] Failed to start playing playlist: {e}")
+                    logger.warning(f"[MUSIC | {vc.guild.name if vc.guild else 'Unknown'} | ({vc.guild.id if vc.guild else 'N/A'})] Failed to start playing playlist: {e}")
                     
                     embed = discord.Embed()
 
@@ -729,50 +736,70 @@ class Music(commands.Cog):
                     
                     return await ctx.send(embed=embed)
                 else:
-                    logger.info(f"[MUSIC | {vc.guild.name if vc.guild else "Unknown"} | ({vc.guild.id if vc.guild else "N/A"})] Started playing playlist.")
-            # Ensure panel message exists or is created, then update it.
+                    logger.info(f"[MUSIC | {vc.guild.name if vc.guild else 'Unknown'} | ({vc.guild.id if vc.guild else 'N/A'})] Started playing playlist.")
             if not vc.panel_message:
                 try:
                     vc.panel_message = await ctx.send(embed=await self.build_embed(vc), view=self.panel_view)
                 except Exception as e:
-                    logger.warning(f"[MUSIC | {vc.guild.name if vc.guild else "Unknown"} | ({vc.guild.id if vc.guild else "N/A"})] Failed to create music panel message for playlist: {e}")
+                    logger.warning(f"[MUSIC | {vc.guild.name if vc.guild else 'Unknown'} | ({vc.guild.id if vc.guild else 'N/A'})] Failed to create music panel message for playlist: {e}")
                     vc.panel_message = None
             if vc.panel_message:
                 await self.update_panel_message(vc)
             return
-        else:
-            track = tracks[0]
-            track.requester = ctx.author
 
-            if vc.playing or vc.paused:
-                vc.queue.put(track)
-                embed = discord.Embed(title="Added to Queue", description=f"[{track.title}]({track.uri})", color=discord.Color.green())
+        # Normalize single-track results (wavelink may return a list or a single Track)
+        if isinstance(raw_results, (list, tuple)):
+            if not raw_results:
+                embed = discord.Embed(title="Internal Error", description=f"No songs found for search: {search}", color=discord.Color.red())
                 await ctx.send(embed=embed)
-                logger.info(f"[MUSIC | {vc.guild.name if vc.guild else "Unknown"} | ({vc.guild.id if vc.guild else "N/A"})] Queued: {track.title}")
-            else:
-                try:
-                    await vc.play(track)
-                except Exception as e:
-                    logger.warning(f"[MUSIC | {vc.guild.name if vc.guild else "Unknown"} | ({vc.guild.id if vc.guild else "N/A"})] Failed to start playing {track.title}: {e}")
-                    
-                    embed = discord.Embed()
+                return
+            track = raw_results[0]
+        elif isinstance(raw_results, wavelink.Track):
+            track = raw_results
+        else:
+            # Fallback attempt to index
+            try:
+                track = raw_results[0]
+            except Exception:
+                embed = discord.Embed(title="Internal Error", description=f"No playable results for: {search}", color=discord.Color.red())
+                await ctx.send(embed=embed)
+                return
 
-                    embed.title = "Internal Error"  
-                    embed.description = "Failed to play the track."
-                    embed.color = discord.Color.red()
-                    
-                    return await ctx.send(embed=embed)
-                else:
-                    logger.info(f"[MUSIC | {vc.guild.name if vc.guild else "Unknown"} | ({vc.guild.id if vc.guild else "N/A"})] Now playing: {track.title}")
-                    # Ensure panel message exists or is created, then update it.
-                    if not vc.panel_message:
-                        try:
-                            vc.panel_message = await ctx.send(embed=await self.build_embed(vc), view=self.panel_view)
-                        except Exception as e:
-                            logger.warning(f"[MUSIC | {vc.guild.name if vc.guild else "Unknown"} | ({vc.guild.id if vc.guild else "N/A"})] Failed to create music panel message for single track: {e}")
-                            vc.panel_message = None
-                    if vc.panel_message:
-                        await self.update_panel_message(vc)
+        # Ensure requester is set
+        try:
+            track.requester = ctx.author
+        except Exception:
+            pass
+
+        # If something is currently playing or there are items in queue, enqueue; otherwise play immediately.
+        if vc.playing or not getattr(vc, "queue", None) is None and not vc.queue.is_empty:
+            vc.queue.put(track)
+            embed = discord.Embed(title="Added to Queue", description=f"[{getattr(track, 'title', 'Unknown')}]({getattr(track, 'uri', '')})", color=discord.Color.green())
+            await ctx.send(embed=embed)
+            logger.info(f"[MUSIC | {vc.guild.name if vc.guild else 'Unknown'} | ({vc.guild.id if vc.guild else 'N/A'})] Queued: {getattr(track, 'title', 'Unknown')}")
+        else:
+            try:
+                await vc.play(track)
+            except Exception as e:
+                logger.warning(f"[MUSIC | {vc.guild.name if vc.guild else 'Unknown'} | ({vc.guild.id if vc.guild else 'N/A'})] Failed to start playing {getattr(track, 'title', 'Unknown')}: {e}")
+                
+                embed = discord.Embed()
+
+                embed.title = "Internal Error"  
+                embed.description = "Failed to play the track."
+                embed.color = discord.Color.red()
+                
+                return await ctx.send(embed=embed)
+            else:
+                logger.info(f"[MUSIC | {vc.guild.name if vc.guild else 'Unknown'} | ({vc.guild.id if vc.guild else 'N/A'})] Now playing: {getattr(track, 'title', 'Unknown')}")
+                if not vc.panel_message:
+                    try:
+                        vc.panel_message = await ctx.send(embed=await self.build_embed(vc), view=self.panel_view)
+                    except Exception as e:
+                        logger.warning(f"[MUSIC | {vc.guild.name if vc.guild else 'Unknown'} | ({vc.guild.id if vc.guild else 'N/A'})] Failed to create music panel message for single track: {e}")
+                        vc.panel_message = None
+                if vc.panel_message:
+                    await self.update_panel_message(vc)
 
 
     @music.command(name="skip", aliases=['s'])
