@@ -619,8 +619,6 @@ class Music(commands.Cog):
 
             search = await get_url_from_query(search)
 
-            tracks = await wavelink.Playable.search(f"ytsearch:{search}")
-
         if not tracks:
 
             embed = discord.Embed()
