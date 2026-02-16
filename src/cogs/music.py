@@ -11,7 +11,7 @@ import re
 import urllib.parse as _urlparse
 import aiohttp
 
-async def get_url_from_query(query: str) -> str | None:
+async def search_youtube(query: str) -> str | None:
     query = _urlparse.quote_plus(query)
     url = f"https://majnik-api.vercel.app/yt/search?query={query}"
 
@@ -26,11 +26,17 @@ async def get_url_from_query(query: str) -> str | None:
         if not data.get("results"):
             return None
         
-        return data["results"][0]["url"]  # first result
+        return data
 
     except Exception as e:
         print("YT API search failed:", e)
         return None
+
+async def get_url_from_query(query: str) -> str | None:
+    return await search_youtube(query)["results"][0]["url"]
+
+async def get_image_from_query(query: str) -> str | None:
+    return await search_youtube(query)["results"][0]["thumbnail"]
 
 class CustomPlayer(wavelink.Player):
     def __init__(self, *args, **kwargs):
@@ -437,7 +443,7 @@ class Music(commands.Cog):
             embed.add_field(name="Repeat", value=repeat_status, inline=True)
             embed.add_field(name="Progress", value=f"`{time_string}`\n{progress_bar}", inline=False)
             # Use the track's thumbnail if available, otherwise use the bot's avatar
-            thumbnail = getattr(track, "thumbnail", None)
+            thumbnail = await get_image_from_query(track.title) if track else None
             if thumbnail:
                 embed.set_thumbnail(url=thumbnail)
             elif self.bot.user and self.bot.user.avatar:
